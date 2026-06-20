@@ -1,0 +1,14 @@
+[package]
+name = "organizeme_native"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "organizeme_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["extension-module", "abi3-py312"] }
+blake3 = "1"
+jwalk = "0.8"
+rayon = "1"

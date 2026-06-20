@@ -109,16 +109,3 @@ def process_audio_file(file_path):
 
     except FileNotFoundError:
         print(f"Error: Audio file not found at {file_path}!")
-
-    
-    """
-    Process (Read) the text from a text file
-    """
-    
-    try:
-        with open(file_path, 'r', encoding='utf-8') as file:
-            text = file.read(max_chars)
-        return text
-    except Exception as e:
-        print(f"Error {e} occuredreading the text file {file_path}!")
-        return

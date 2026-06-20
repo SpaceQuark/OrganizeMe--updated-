@@ -1,330 +1,179 @@
+"""OrganizeMe CLI — local, offline, multimodal file organizer.
+
+Default (no subcommand) launches the interactive flow. Subcommands expose the same
+pipeline non-interactively for scripting:
+
+    python main.py organize <dir> --mode content --apply
+    python main.py index <dir>
+    python main.py search "quarterly revenue" --index <dir>/.organizeme/index
+    python main.py dedup <dir> --apply
+"""
+
 import os
-import time
+import sys
+import argparse
 
-from file_utils import (
-    display_directory_tree,
-    collect_file_paths,
-    separate_files_by_type,
-    read_file_data
-)
+from organizeme import pipeline, scanning
 
-from data_processing_common import (
-    compute_operations,
-    execute_operations,
-    process_files_by_date,
-    process_files_by_type,
-)
 
-from text_data_processing import (
-    process_text_files
-)
-
-from image_data_processing import (
-    process_image_files
-)
-
-from output_filter import filter_specific_output  # Import the context manager
-from ollama_integration import OllamaVLMInference, OllamaTextInference  # Import Ollama classes
-
-def ensure_nltk_data():
-    """Ensure that NLTK data is downloaded efficiently and quietly."""
-    import nltk
-    nltk.download('stopwords', quiet=True)
-    nltk.download('punkt', quiet=True)
-    nltk.download('wordnet', quiet=True)
-
-# Initialize models
-image_inference = None
-text_inference = None
-
-def initialize_models():
-    """Initialize the models if they haven't been initialized yet."""
-    global image_inference, text_inference
-    if image_inference is None or text_inference is None:
-        # Initialize the models
-        model_name_vlm = "llava"  # Default LLaVA model
-        model_name_text = "llama2"  # Default Llama 2 model
-
-        # Use the filter_specific_output context manager
-        with filter_specific_output():
-            # Initialize the image inference model
-            image_inference = OllamaVLMInference(
-                model_name=model_name_vlm,
-                temperature=0.3,
-                max_tokens=3000,
-                top_k=3,
-                top_p=0.2,
-                stop_words=[]
-            )
-
-            # Initialize the text inference model
-            text_inference = OllamaTextInference(
-                model_name=model_name_text,
-                temperature=0.5,
-                max_tokens=3000,
-                top_k=3,
-                top_p=0.3,
-                stop_words=[]
-            )
-        print("**----------------------------------------------**")
-        print("**       Image inference model initialized      **")
-        print("**       Text inference model initialized       **")
-        print("**----------------------------------------------**")
-
-def simulate_directory_tree(operations, base_path):
-    """Simulate the directory tree based on the proposed operations."""
-    tree = {}
-    for op in operations:
-        rel_path = os.path.relpath(op['destination'], base_path)
-        parts = rel_path.split(os.sep)
-        current_level = tree
-        for part in parts:
-            if part not in current_level:
-                current_level[part] = {}
-            current_level = current_level[part]
-    return tree
-
-def print_simulated_tree(tree, prefix=''):
-    """Print the simulated directory tree."""
-    pointers = ['├── '] * (len(tree) - 1) + ['└── '] if tree else []
-    for pointer, key in zip(pointers, tree):
-        print(prefix + pointer + key)
-        if tree[key]:  # If there are subdirectories or files
-            extension = '│   ' if pointer == '├── ' else '    '
-            print_simulated_tree(tree[key], prefix + extension)
+# --------------------------------------------------------------------------- #
+# Interactive flow
+# --------------------------------------------------------------------------- #
 
 def get_yes_no(prompt):
-    """Prompt the user for a yes/no response."""
     while True:
         response = input(prompt).strip().lower()
-        if response in ('yes', 'y'):
+        if response in ("yes", "y"):
             return True
-        elif response in ('no', 'n'):
+        if response in ("no", "n"):
             return False
-        elif response == '/exit':
+        if response == "/exit":
             print("Exiting program.")
-            exit()
-        else:
-            print("Please enter 'yes' or 'no'. To exit, type '/exit'.")
+            sys.exit(0)
+        print("Please enter 'yes' or 'no'. To exit, type '/exit'.")
+
 
 def get_mode_selection():
-    """Prompt the user to select a mode."""
     while True:
         print("Please choose the mode to organize your files:")
-        print("1. By Content")
-        print("2. By Date")
-        print("3. By Type")
-        response = input("Enter 1, 2, or 3 (or type '/exit' to exit): ").strip()
-        if response == '/exit':
+        print("1. By Content   2. By Date   3. By Type")
+        response = input("Enter 1, 2, or 3 (or '/exit'): ").strip()
+        if response == "/exit":
             print("Exiting program.")
-            exit()
-        elif response == '1':
-            return 'content'
-        elif response == '2':
-            return 'date'
-        elif response == '3':
-            return 'type'
-        else:
-            print("Invalid selection. Please enter 1, 2, or 3. To exit, type '/exit'.")
+            sys.exit(0)
+        if response in {"1": "content", "2": "date", "3": "type"}:
+            return {"1": "content", "2": "date", "3": "type"}[response]
+        print("Invalid selection. Please enter 1, 2, or 3.")
 
-def main():
-    # Ensure NLTK data is downloaded efficiently and quietly
-    ensure_nltk_data()
 
-    # Start with dry run set to True
-    dry_run = True
-
-    # Display silent mode explanation before asking
-    print("-" * 50)
-    print("**NOTE: Silent mode logs all outputs to a text file instead of displaying them in the terminal.")
-    silent_mode = get_yes_no("Would you like to enable silent mode? (yes/no): ")
-    if silent_mode:
-        log_file = 'operation_log.txt'
-    else:
-        log_file = None
-
+def run_interactive():
     while True:
-        # Paths configuration
-        if not silent_mode:
-            print("-" * 50)
-
-        # Get input and output paths once per directory
-        input_path = input("Enter the path of the directory you want to organize: ").strip()
+        print("-" * 50)
+        input_path = input("Enter the directory you want to organize: ").strip()
         while not os.path.exists(input_path):
-            message = f"Input path {input_path} does not exist. Please enter a valid path."
-            if silent_mode:
-                with open(log_file, 'a') as f:
-                    f.write(message + '\n')
-            else:
-                print(message)
-            input_path = input("Enter the path of the directory you want to organize: ").strip()
+            print(f"Input path {input_path!r} does not exist.")
+            input_path = input("Enter the directory you want to organize: ").strip()
 
-        # Confirm successful input path
-        message = f"Input path successfully uploaded: {input_path}"
-        if silent_mode:
-            with open(log_file, 'a') as f:
-                f.write(message + '\n')
-        else:
-            print(message)
-        if not silent_mode:
-            print("-" * 50)
+        output_path = input(
+            "Enter the output directory (press Enter for 'organized_folder'): "
+        ).strip() or None
 
-        # Default output path is a folder named "organized_folder" in the same directory as the input path
-        output_path = input("Enter the path to store organized files and folders (press Enter to use 'organized_folder' in the input directory): ").strip()
-        if not output_path:
-            # Get the parent directory of the input path and append 'organized_folder'
-            output_path = os.path.join(os.path.dirname(input_path), 'organized_folder')
+        print("\nDirectory tree before organizing:")
+        scanning.display_directory_tree(input_path)
+        print("*" * 50)
 
-        # Confirm successful output path
-        message = f"Output path successfully set to: {output_path}"
-        if silent_mode:
-            with open(log_file, 'a') as f:
-                f.write(message + '\n')
-        else:
-            print(message)
-        if not silent_mode:
-            print("-" * 50)
-
-        # Start processing files
-        start_time = time.time()
-        file_paths = collect_file_paths(input_path)
-        end_time = time.time()
-
-        message = f"Time taken to load file paths: {end_time - start_time:.2f} seconds"
-        if silent_mode:
-            with open(log_file, 'a') as f:
-                f.write(message + '\n')
-        else:
-            print(message)
-        if not silent_mode:
-            print("-" * 50)
-            print("Directory tree before organizing:")
-            display_directory_tree(input_path)
-
-            print("*" * 50)
-
-        # Loop for selecting sorting methods
         while True:
             mode = get_mode_selection()
+            print(f"Analyzing files (mode={mode}). This may take a few minutes...")
+            plan = pipeline.dry_run_organize(input_path, mode, output_path)
 
-            if mode == 'content':
-                # Proceed with content mode
-                # Initialize models once
-                if not silent_mode:
-                    print("Checking if the model is already downloaded. If not, downloading it now.")
-                initialize_models()
-
-                if not silent_mode:
-                    print("*" * 50)
-                    print("The file upload was successful. Processing may take a few minutes.")
-                    print("*" * 50)
-
-                # Prepare to collect link type statistics
-                link_type_counts = {'hardlink': 0, 'symlink': 0}
-
-                # Separate files by type
-                image_files, text_files = separate_files_by_type(file_paths)
-
-                # Prepare text tuples for processing
-                text_tuples = []
-                for fp in text_files:
-                    # Use read_file_data to read the file content
-                    text_content = read_file_data(fp)
-                    if text_content is None:
-                        message = f"Unsupported or unreadable text file format: {fp}"
-                        if silent_mode:
-                            with open(log_file, 'a') as f:
-                                f.write(message + '\n')
-                        else:
-                            print(message)
-                        continue  # Skip unsupported or unreadable files
-                    text_tuples.append((fp, text_content))
-
-                # Process files sequentially
-                data_images = process_image_files(image_files, image_inference, text_inference, silent=silent_mode, log_file=log_file)
-                data_texts = process_text_files(text_tuples, text_inference, silent=silent_mode, log_file=log_file)
-
-                # Prepare for copying and renaming
-                renamed_files = set()
-                processed_files = set()
-
-                # Combine all data
-                all_data = data_images + data_texts
-
-                # Compute the operations
-                operations = compute_operations(
-                    all_data,
-                    output_path,
-                    renamed_files,
-                    processed_files
-                )
-
-            elif mode == 'date':
-                # Process files by date
-                operations = process_files_by_date(file_paths, output_path, dry_run=False, silent=silent_mode, log_file=log_file)
-            elif mode == 'type':
-                # Process files by type
-                operations = process_files_by_type(file_paths, output_path, dry_run=False, silent=silent_mode, log_file=log_file)
-            else:
-                print("Invalid mode selected.")
-                return
-
-            # Simulate and display the proposed directory tree
             print("-" * 50)
-            message = "Proposed directory structure:"
-            if silent_mode:
-                with open(log_file, 'a') as f:
-                    f.write(message + '\n')
-            else:
-                print(message)
-                print(os.path.abspath(output_path))
-                simulated_tree = simulate_directory_tree(operations, output_path)
-                print_simulated_tree(simulated_tree)
+            print("Proposed directory structure:")
+            print(os.path.abspath(plan["output_path"]))
+            for line in plan["tree"]:
+                print(line)
+            print("-" * 50)
+
+            if get_yes_no("Proceed with these changes? (yes/no): "):
+                pipeline.organize_files(input_path, mode, plan["output_path"], apply=True)
                 print("-" * 50)
+                print("The files have been organized successfully.")
+                print("-" * 50)
+                break
+            if not get_yes_no("Choose another sorting method? (yes/no): "):
+                print("Operation canceled by the user.")
+                break
 
-            # Ask user if they want to proceed
-            proceed = get_yes_no("Would you like to proceed with these changes? (yes/no): ")
-            if proceed:
-                # Create the output directory now
-                os.makedirs(output_path, exist_ok=True)
-
-                # Perform the actual file operations
-                message = "Performing file operations..."
-                if silent_mode:
-                    with open(log_file, 'a') as f:
-                        f.write(message + '\n')
-                else:
-                    print(message)
-                execute_operations(
-                    operations,
-                    dry_run=False,
-                    silent=silent_mode,
-                    log_file=log_file
-                )
-
-                message = "The files have been organized successfully."
-                if silent_mode:
-                    with open(log_file, 'a') as f:
-                        f.write("-" * 50 + '\n' + message + '\n' + "-" * 50 + '\n')
-                else:
-                    print("-" * 50)
-                    print(message)
-                    print("-" * 50)
-                break  # Exit the sorting method loop after successful operation
-            else:
-                # Ask if the user wants to try another sorting method
-                another_sort = get_yes_no("Would you like to choose another sorting method? (yes/no): ")
-                if another_sort:
-                    continue  # Loop back to mode selection
-                else:
-                    print("Operation canceled by the user.")
-                    break  # Exit the sorting method loop
-
-        # Ask if the user wants to organize another directory
-        another_directory = get_yes_no("Would you like to organize another directory? (yes/no): ")
-        if not another_directory:
-            break  # Exit the main loop
+        if not get_yes_no("Organize another directory? (yes/no): "):
+            break
 
 
-if __name__ == '__main__':
+# --------------------------------------------------------------------------- #
+# Subcommands
+# --------------------------------------------------------------------------- #
+
+def cmd_organize(args):
+    plan = pipeline.organize_files(
+        args.path, mode=args.mode, output_path=args.output, apply=args.apply
+    )
+    if not args.apply:
+        print(f"\nProposed layout under {os.path.abspath(plan['output_path'])}:")
+        for line in pipeline.proposed_tree(plan["operations"], plan["output_path"]):
+            print(line)
+        print(f"\n{len(plan['operations'])} operation(s). Re-run with --apply to execute.")
+
+
+def cmd_index(args):
+    from organizeme import search
+    count = search.build_index(args.path, args.output)
+    print(f"Indexed {count} file(s).")
+
+
+def cmd_search(args):
+    from organizeme import search
+    results = search.semantic_search(args.query, args.index, k=args.k)
+    if not results:
+        print("No results.")
+        return
+    for score, path in results:
+        print(f"{score:.3f}  {path}")
+
+
+def cmd_dedup(args):
+    from organizeme import dedup
+    report = dedup.detect_duplicates(args.path, threshold=args.threshold, apply=args.apply)
+    clusters = report["clusters"]
+    if not clusters:
+        print("No duplicates found.")
+        return
+    for cluster in clusters:
+        print(f"\nDUPLICATE CLUSTER (method={cluster['method']}, sim={cluster.get('similarity', 1.0):.3f})")
+        print(f"  keep: {cluster['keep']}")
+        for dup in cluster["duplicates"]:
+            print(f"  dupe: {dup}")
+    action = "Quarantined" if args.apply else "Would quarantine"
+    print(f"\n{action} {report['duplicate_count']} file(s).")
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(description="OrganizeMe — local AI file organizer")
+    sub = parser.add_subparsers(dest="command")
+
+    p = sub.add_parser("organize", help="Organize a directory")
+    p.add_argument("path")
+    p.add_argument("--mode", choices=["content", "date", "type"], default="type")
+    p.add_argument("--output", default=None)
+    p.add_argument("--apply", action="store_true", help="Execute (default: dry-run)")
+    p.set_defaults(func=cmd_organize)
+
+    p = sub.add_parser("index", help="Build a FAISS semantic index for a directory")
+    p.add_argument("path")
+    p.add_argument("--output", default=None, help="Index dir (default: <path>/.organizeme/index)")
+    p.set_defaults(func=cmd_index)
+
+    p = sub.add_parser("search", help="Semantic search over a built index")
+    p.add_argument("query")
+    p.add_argument("--index", required=True, help="Index dir created by 'index'")
+    p.add_argument("-k", type=int, default=5)
+    p.set_defaults(func=cmd_search)
+
+    p = sub.add_parser("dedup", help="Detect (and optionally quarantine) duplicates")
+    p.add_argument("path")
+    p.add_argument("--threshold", type=float, default=None)
+    p.add_argument("--apply", action="store_true", help="Quarantine duplicates")
+    p.set_defaults(func=cmd_dedup)
+
+    return parser
+
+
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
+    if not args.command:
+        run_interactive()
+    else:
+        args.func(args)
+
+
+if __name__ == "__main__":
     main()

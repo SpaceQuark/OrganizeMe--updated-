@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+*.egg-info/
+
+# Rust / native extension
+native/target/
+*.so
+
+# macOS
+.DS_Store
+
+.cursor/
