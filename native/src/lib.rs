@@ -13,9 +13,8 @@ fn scan_paths(base: &str, exclude_dirs: Vec<String>) -> PyResult<Vec<String>> {
     let excluded: Arc<HashSet<String>> = Arc::new(exclude_dirs.into_iter().collect());
     let excluded_for_prune = Arc::clone(&excluded);
 
-    let walker = WalkDir::new(base)
-        .skip_hidden(false)
-        .process_read_dir(move |_depth, _path, _state, children| {
+    let walker = WalkDir::new(base).skip_hidden(false).process_read_dir(
+        move |_depth, _path, _state, children| {
             children.retain(|child| match child {
                 Ok(entry) => {
                     // Prune excluded directories so their contents are never walked.
@@ -30,7 +29,8 @@ fn scan_paths(base: &str, exclude_dirs: Vec<String>) -> PyResult<Vec<String>> {
                 }
                 Err(_) => true,
             });
-        });
+        },
+    );
 
     let mut out = Vec::new();
     for entry in walker {

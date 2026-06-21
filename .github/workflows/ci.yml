@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Rust formatting + lints on the native crate.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: rustfmt
+        working-directory: native
+        run: cargo fmt --check
+      - name: clippy
+        working-directory: native
+        run: cargo clippy --all-targets -- -D warnings
+
+  # Test the package with the native extension active AND in pure-Python
+  # fallback mode, across OSes and Python versions.
+  test:
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --inexact -p ${{ matrix.python }}
+
+      - name: Build native extension
+        run: uv run maturin develop --release -m native/Cargo.toml
+
+      - name: Test (native extension active)
+        run: uv run pytest -q
+
+      - name: Test (pure-Python fallback)
+        # Block the import so organizeme.native.HAVE_NATIVE is False, proving the
+        # fallback path still passes without the compiled extension.
+        run: |
+          uv run python -c "import sys; sys.modules['organizeme_native'] = None; import pytest; raise SystemExit(pytest.main(['-q']))"
+
+  # Build distributable wheels for the native extension. abi3-py312 means one
+  # wheel per platform covers CPython 3.12+. Runs on main and tags only.
+  wheels:
+    needs: test
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # cibuildwheel builds Linux wheels inside manylinux containers (Rust is
+      # installed there via CIBW_BEFORE_ALL_LINUX); macOS builds on the host, so
+      # it needs the toolchain here.
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Build wheels
+        run: uvx --from 'cibuildwheel>=2.16,<3' cibuildwheel --output-dir wheelhouse native
+        env:
+          CIBW_BUILD: "cp312-*"
+          CIBW_SKIP: "*-musllinux*"
+          CIBW_BEFORE_ALL_LINUX: "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal"
+          CIBW_ENVIRONMENT_LINUX: 'PATH="$HOME/.cargo/bin:$PATH"'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: wheelhouse/*.whl

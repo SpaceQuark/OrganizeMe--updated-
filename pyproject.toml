@@ -25,4 +25,5 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=8.0.0",
+    "maturin>=1.5,<2",
 ]
