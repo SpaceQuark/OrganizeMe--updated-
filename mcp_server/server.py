@@ -87,6 +87,18 @@ def semantic_search(query: str, path: str, k: int = 5) -> dict:
     return {"results": [{"score": score, "path": p} for score, p in results]}
 
 
+@mcp.tool()
+def answer(query: str, path: str, k: int = 5) -> dict:
+    """Answer a question grounded in a directory's indexed files (RAG).
+
+    Build the index first with ``build_index``. Retrieves the top ``k`` text
+    chunks and synthesizes an answer that cites sources by number.
+    Returns: answer, grounded (whether anything was retrieved), and sources
+    (each with n, path, score, char offsets, and a snippet).
+    """
+    return pipeline.answer(query, input_path=path, k=k)
+
+
 def main():
     mcp.run()
 

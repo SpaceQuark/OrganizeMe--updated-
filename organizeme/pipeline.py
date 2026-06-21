@@ -122,3 +122,16 @@ def semantic_search(query, input_path=None, index_dir=None, k=5):
             raise ValueError("provide index_dir or input_path")
         index_dir = search.default_index_dir(input_path)
     return search.semantic_search(query, index_dir, k=k)
+
+
+def answer(query, input_path=None, index_dir=None, k=5):
+    """Answer a question grounded in the index (RAG). See ``rag.answer``.
+
+    Pass either an ``index_dir`` or an ``input_path`` to derive it.
+    """
+    from organizeme import search, rag
+    if index_dir is None:
+        if input_path is None:
+            raise ValueError("provide index_dir or input_path")
+        index_dir = search.default_index_dir(input_path)
+    return rag.answer(query, index_dir, k=k)

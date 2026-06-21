@@ -6,6 +6,7 @@ pipeline non-interactively for scripting:
     python main.py organize <dir> --mode content --apply
     python main.py index <dir>
     python main.py search "quarterly revenue" --index <dir>/.organizeme/index
+    python main.py ask "what were Q3 revenues?" --index <dir>/.organizeme/index
     python main.py dedup <dir> --apply
 """
 
@@ -119,6 +120,19 @@ def cmd_search(args):
         print(f"{score:.3f}  {path}")
 
 
+def cmd_ask(args):
+    from organizeme import pipeline
+    result = pipeline.answer(args.query, index_dir=args.index, k=args.k)
+    if not result["grounded"]:
+        print("No indexed content matched the question. Build the index first with 'index'.")
+        return
+    print(result["answer"] or "(model returned no answer)")
+    if result["sources"]:
+        print("\nSources:")
+        for source in result["sources"]:
+            print(f"  [{source['n']}] {source['path']}  ({source['score']:.3f})")
+
+
 def cmd_dedup(args):
     from organizeme import dedup
     report = dedup.detect_duplicates(args.path, threshold=args.threshold, apply=args.apply)
@@ -156,6 +170,12 @@ def build_parser():
     p.add_argument("--index", required=True, help="Index dir created by 'index'")
     p.add_argument("-k", type=int, default=5)
     p.set_defaults(func=cmd_search)
+
+    p = sub.add_parser("ask", help="Answer a question grounded in an index (RAG)")
+    p.add_argument("query")
+    p.add_argument("--index", required=True, help="Index dir created by 'index'")
+    p.add_argument("-k", type=int, default=5)
+    p.set_defaults(func=cmd_ask)
 
     p = sub.add_parser("dedup", help="Detect (and optionally quarantine) duplicates")
     p.add_argument("path")
